@@ -1,0 +1,110 @@
+admin:
+  access_log_path: /dev/null
+  address:
+    socket_address:
+      address: 0.0.0.1
+      port_value: 9000
+
+static_resources:
+  listeners:
+  - name: listener_0
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 8080 }
+
+    filter_chains:
+    - filters:
+      - name: envoy.http_connection_manager
+        typed_config:  
+          "@type": type.googleapis.com/envoy.config.filter.network.http_connection_manager.v2.HttpConnectionManager
+          stat_prefix: ingress_http
+          codec_type: AUTO
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: local_service
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  # host_rewrite: server.domain.com
+                  cluster: service_backend
+                request_headers_to_add:
+                  - header:
+                      key: x-custom-to-backend
+                      value: value-for-backend-from-envoy
+                # per_filter_config:
+                #   envoy.ext_authz:
+                #     check_settings:
+                #       context_extensions:
+                #         x-forwarded-host: original-host-as-context  
+                                          
+          http_filters:  
+          - name: envoy.lua
+            config:
+              inline_code: |
+                function envoy_on_request(request_handle)
+                  request_handle:logInfo('>>> LUA envoy_on_request Called')
+                  --buf = request_handle:body()
+                  --bufbytes = buf:getBytes(0, buf:length())
+                  --request_handle:logInfo(bufbytes)
+                end
+                
+                function envoy_on_response(response_handle)
+                  response_handle:logInfo('>>> LUA envoy_on_response Called')
+                  response_handle:headers():add("X-Custom-Header-From-LUA", "bar")
+                end
+          - name: envoy.filters.http.jwt_authn
+            config:
+              providers:
+                example-jwt:
+                  issuer: http://localhost:8082
+                  forward: true
+                  forward_payload_header: x-jwt-payload
+                  # local_jwks:
+                  #   inline_string: "{\"keys\":[{\"kty\":\"RSA\",\"use\":\"sig\",\"kid\":\"HAd4SUuWKI_4YVPmw5zEeg\",\"e\":\"AQAB\",\"n\":\"zufwQ6rYi7RlJzQziLIVKVgUvxiD7iYrg-ci3hbcK6EuErqkjagFFJcxaosAqu6TOf6Xqqv87mJjyCdGTA-1S0HfLzBAkz-IL37BkZ--eFotH0wz-e2uJDiC_FmH9DOqtj98EDsSlqJp65MvpI1o6ZoY_MpZDk3vvGlzogLbcfm1foI6G1iU5x11KLyGNvb7kpouf9MPlKMbtxGpMwSTG9CMHzfgND1G9z8kWdVdMJNYTgWxoiv0g7O9A3jkI5iJJjMv5wAJuzPGCgijT6NBLFzpWFDSBW8rHBuLhzxCAG9SVeqPVPf1DbbQ-JM08ZQ6yaYKBbyemxoRSv3aa7Rf8Q\",\"alg\":\"RS256\"}]}"
+                  remote_jwks:
+                    http_uri:
+                      uri: http://localhost:8082/.well-known/openid-configuration/jwks
+                      cluster: identity-identity
+                      timeout: 5s
+                    cache_duration:
+                      seconds: 300
+              rules:
+              - match:
+                  prefix: "/"
+                requires:
+                  provider_name: "example-jwt"  
+          - name: envoy.router
+
+  clusters:
+  - name: service_backend
+    connect_timeout: 2s
+    type: STRICT_DNS
+    # dns_lookup_family: V4_ONLY
+    lb_policy: ROUND_ROBIN
+    hosts:
+    - socket_address:
+        address: backend
+        port_value: 8123
+  - name: identity-identity
+    type: STRICT_DNS
+    connect_timeout: 0.25s
+    http2_protocol_options: {}
+    load_assignment:
+      cluster_name: identity-identity
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: identityserver
+                port_value: 8082
+    # transport_socket:
+    #   name: envoy.transport_sockets.tls
+    #   typed_config: "@type": "type.googleapis.com/envoy.api.v2.auth.UpstreamTlsContext",
+    #   sni: localhost
+    #   common_tls_context: 
+    #     validation_context:
+    #       trusted_ca:
+    #         filename: /etc/ssl/certs/ca-certificates.crt

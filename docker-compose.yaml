@@ -1,0 +1,38 @@
+version: "3.7"
+services:
+
+  envoy:
+    build:
+      context: .
+      dockerfile: Dockerfile-envoy
+    networks:
+      - envoymesh
+    expose:
+      - "8001"
+      - "8080"
+    ports:
+      - "8001:8001"
+      - "8080:8080"
+
+  identityserver:
+    build:
+      context: identity_server
+    networks:
+      - envoymesh
+    expose:
+      - "8080"
+    ports:
+      - "8082:8082"
+
+  backend:
+    build:
+      context: backend_server
+    networks:
+      - envoymesh
+    expose:
+      - "8123"
+    ports:
+      - "8123:8123"
+
+networks:
+  envoymesh: {}
